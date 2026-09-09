@@ -1,0 +1,6 @@
+bin/
+obj/
+auth.db
+auth.db-shm
+auth.db-wal
+.vs/

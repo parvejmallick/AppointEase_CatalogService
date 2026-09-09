@@ -1,0 +1,6 @@
+@AppointEase_CatalogService_HostAddress = http://localhost:5139
+
+GET {{AppointEase_CatalogService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
