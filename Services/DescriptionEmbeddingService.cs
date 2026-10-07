@@ -1,5 +1,6 @@
-using System.Security.Cryptography;
-using System.Text;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json.Serialization;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Embeddings;
 
@@ -7,35 +8,55 @@ namespace AppointEase_CatalogService.Services;
 
 public sealed class DescriptionEmbeddingService : ITextEmbeddingGenerationService
 {
+    private readonly HttpClient _httpClient;
+    private readonly IConfiguration _configuration;
+
+    public DescriptionEmbeddingService(HttpClient httpClient, IConfiguration configuration)
+    {
+        _httpClient = httpClient;
+        _configuration = configuration;
+    }
+
     public IReadOnlyDictionary<string, object?> Attributes { get; } =
         new Dictionary<string, object?>();
 
-    public Task<IList<ReadOnlyMemory<float>>> GenerateEmbeddingsAsync(
+    public async Task<IList<ReadOnlyMemory<float>>> GenerateEmbeddingsAsync(
         IList<string> data,
         Kernel? kernel = null,
         CancellationToken cancellationToken = default)
     {
-        IList<ReadOnlyMemory<float>> embeddings = data
-            .Select(CreateEmbedding)
-            .ToList();
+        var apiKey = _configuration["OpenAI:ApiKey"]
+            ?? throw new InvalidOperationException("OpenAI:ApiKey is missing from configuration.");
+        var model = _configuration["OpenAI:EmbeddingModel"] ?? "text-embedding-3-small";
 
-        return Task.FromResult(embeddings);
-    }
+        using var request = new HttpRequestMessage(HttpMethod.Post, "v1/embeddings");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Content = JsonContent.Create(new EmbeddingRequest(model, data));
 
-    private static ReadOnlyMemory<float> CreateEmbedding(string description)
-    {
-        var values = new float[1536];
-        var descriptionBytes = Encoding.UTF8.GetBytes(description);
-
-        for (var index = 0; index < values.Length; index++)
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
         {
-            var input = new byte[descriptionBytes.Length + sizeof(int)];
-            Buffer.BlockCopy(descriptionBytes, 0, input, 0, descriptionBytes.Length);
-            Buffer.BlockCopy(BitConverter.GetBytes(index), 0, input, descriptionBytes.Length, sizeof(int));
-            var hash = SHA256.HashData(input);
-            values[index] = (float)((BitConverter.ToUInt16(hash, 0) / (double)ushort.MaxValue * 2d) - 1d);
+            var details = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new HttpRequestException($"OpenAI embeddings request failed ({(int)response.StatusCode}): {details}");
         }
 
-        return values;
+        var result = await response.Content.ReadFromJsonAsync<EmbeddingResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("OpenAI returned an empty embeddings response.");
+
+        return result.Data
+            .OrderBy(item => item.Index)
+            .Select(item => (ReadOnlyMemory<float>)item.Embedding)
+            .ToList();
     }
+
+    private sealed record EmbeddingRequest(
+        [property: JsonPropertyName("model")] string Model,
+        [property: JsonPropertyName("input")] IList<string> Input);
+
+    private sealed record EmbeddingResponse(
+        [property: JsonPropertyName("data")] List<EmbeddingData> Data);
+
+    private sealed record EmbeddingData(
+        [property: JsonPropertyName("index")] int Index,
+        [property: JsonPropertyName("embedding")] float[] Embedding);
 }

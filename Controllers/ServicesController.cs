@@ -78,15 +78,16 @@ public sealed class ServicesController : ControllerBase
         [FromBody] AddServiceRequest request,
         CancellationToken cancellationToken)
     {
+        var embeddingInput = $"Service name: {request.Name}. Description: {request.Description}";
         var embeddings = await _embeddingService.GenerateEmbeddingsAsync(
-            [request.Description],
+            [embeddingInput],
             cancellationToken: cancellationToken);
         var embedding = embeddings.Single();
         var embeddingText = $"[{string.Join(',', embedding.ToArray().Select(value => value.ToString("0.######", CultureInfo.InvariantCulture)))}]";
 
         await using var command = _dataSource.CreateCommand("""
-            INSERT INTO services (name, description, price, duration_minutes, description_embedding)
-            VALUES ($1, $2, $3, $4, CAST($5 AS vector))
+            INSERT INTO services (name, description, price, duration_minutes, description_embedding, embedding_model)
+            VALUES ($1, $2, $3, $4, CAST($5 AS vector), $6)
             RETURNING id, name, description, price, duration_minutes, created_at;
             """);
 
@@ -95,6 +96,7 @@ public sealed class ServicesController : ControllerBase
         command.Parameters.AddWithValue(request.Price);
         command.Parameters.AddWithValue(request.DurationMinutes);
         command.Parameters.AddWithValue(embeddingText);
+        command.Parameters.AddWithValue("text-embedding-3-small");
 
         try
         {
